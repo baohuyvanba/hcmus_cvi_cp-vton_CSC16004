@@ -1,95 +1,200 @@
-# Toward Characteristic-Preserving Image-based Virtual Try-on Network
-## Cài đặt môi trường
-Thực thi file `environment.yml` để cài đặt môi trường phù hợp.
-## Dataset:
-Mô hình sử dụng bộ dataset VITON-resize được sửa đổi từ bộ dữ liệu VITON để phù hợp với thiết kế mô hình. Dữ liệu có thể tải về theo link [GoogleDrive](https://drive.google.com/open?id=1MxCUvKxejnwWnoZ-KoCyMCXo3TLhRuTo).
-## GMM (Geometric Matching Module)
-### Train (quá trình huấn luyện)
-Để thực hiện quá trình train của môđun GMM (yêu cầu thiết bị train phải hỗ trợ GPU), ta tiến hành chạy file `run_train_gmm.sh` sau:
-``` shell
-torchrun \
-  --standalone \
-  --nnodes=1 \
-  --nproc_per_node=1 \
-  --rdzv_id=100 \
-  --rdzv_backend=c10d \
-  --rdzv_endpoint=localhost:29400 \
-  train.py \
-    --dataroot='/kaggle/input/vton-cp-resized/viton_resize' \
-    --name='GMM' --stage='GMM' --workers=1 --checkpoint_dir='/kaggle/working/' \
-    --save_count=10000 --keep_step=50000 --decay_step=50000
+# Toward Characteristic-Preserving Image-based Virtual Try-on Network (CP-VTON)
+
+This repository contains the reimplementation of the CP-VTON (Characteristic-Preserving Virtual Try-On Network) model, developed as a university course project (CSC16004 at HCMUS).
+
+The project aims to replicate the architecture described in the paper [Toward Characteristic-Preserving Image-based Virtual Try-On Network](https://arxiv.org/abs/1807.08579) (ECCV 2018), focusing on preserving clothing details (texture, logo, etc.) during the virtual try-on process.
+
+## Table of Contents
+- [Toward Characteristic-Preserving Image-based Virtual Try-on Network (CP-VTON)](#toward-characteristic-preserving-image-based-virtual-try-on-network-cp-vton)
+  - [Table of Contents](#table-of-contents)
+  - [Architecture Overview](#architecture-overview)
+  - [Environment Setup](#environment-setup)
+    - [Prerequisites](#prerequisites)
+    - [Installation](#installation)
+  - [Dataset Preparation](#dataset-preparation)
+    - [Download](#download)
+    - [Directory Structure](#directory-structure)
+  - [Training](#training)
+    - [Stage 1: Geometric Matching Module (GMM)](#stage-1-geometric-matching-module-gmm)
+    - [Generate Warped Data for TOM](#generate-warped-data-for-tom)
+    - [Stage 2: Try-On Module (TOM)](#stage-2-try-on-module-tom)
+  - [Evaluation](#evaluation)
+  - [Inference](#inference)
+  - [Pre-trained Models](#pre-trained-models)
+  - [References](#references)
+
+## Architecture Overview
+
+The CP-VTON pipeline consists of two main stages:
+
+1.  **Geometric Matching Module (GMM)**: 
+    -   **Goal**: Warps the target cloth to align with the person's pose.
+    -   **Input**: Person representation (pose, shape, head) and the in-shop cloth image.
+    -   **Mechanism**: Extracts features from both inputs, computes a correlation matrix, and predicts Thin-Plate Spline (TPS) transformation parameters (`theta`). A grid generator then creates a warping grid to deform the cloth.
+    -   **Loss**: L1 loss between the warped cloth and the ground-truth cloth mask on the person.
+
+2.  **Try-On Module (TOM)**:
+    -   **Goal**: Synthesizes the final try-on image.
+    -   **Input**: Person representation and the *warped cloth* (from GMM).
+    -   **Mechanism**: A U-Net based generator (feature encoding and decoding with skip connections). It outputs a rendered person image and a composition mask.
+    -   **Loss**: Combination of L1 loss, VGG perceptual loss, and Mask L1 loss to ensure photo-realistic quality and correct layout.
+
+## Environment Setup
+
+### Prerequisites
+-   Python 3.10
+-   NVIDIA GPU (CUDA support is required for training)
+
+### Installation
+1.  Clone this repository.
+2.  Install the required dependencies using Conda or Pip.
+
+**Using Conda (Recommended):**
+```bash
+conda env create -f environment.yaml
+conda activate cpvton
 ```
-Trong đó, ta có thể tùy theo cấu hình máy mà thay đổ các tham số `--nnodes=1` số lượng các thiết bị training, `--npro_per_node=1` số lượng các nhân GPU trên thiết bị và khi đó phải thực hiện thay đổi tham số`--workers=1`.
 
-### Evaluation (đánh giá)
-Để thực hiện kiểm thử trên tập dữ liệu, ta chạy file `run_test_gmm.sh`
-``` shell
-torchrun \
-  --standalone \
-  --nnodes=1 \
-  --nproc_per_node=1 \
-  --rdzv_id=100 \
-  --rdzv_backend=c10d \
-  --rdzv_endpoint=localhost:29400 \
-  test.py \
-    --dataroot='/kaggle/input/vton-cp-resized/viton_resize' \
-    --name='GMM' --stage='GMM' --workers=1 --checkpoint='/kaggle/input/gmm/pytorch/gmmfinal100k/1/gmm_final.pth' \
-    --data_list='/kaggle/input/vton-cp-resized/viton_resize/test_pairs.txt' --datamode='test'
+**Using Pip:**
+If you prefer pip, ensure you have the following packages installed (see `environment.yaml` for details):
+-   torch
+-   torchvision
+-   pillow
+-   numpy
+-   scipy
+-   tensorboard
+-   tqdm
+-   matplotlib
+
+## Dataset Preparation
+
+The model uses the **VITON** dataset (or a resized version of it). 
+
+### Download
+You can download the processed dataset from the following link:
+-   [Google Drive Link](https://drive.google.com/open?id=1MxCUvKxejnwWnoZ-KoCyMCXo3TLhRuTo)
+
+### Directory Structure
+Extract the dataset into a `data` directory. The structure should look like this:
+
+```
+data/
+|-- train/
+|   |-- image/             # Person images
+|   |-- image-parse/       # Segmentation maps
+|   |-- cloth/             # In-shop cloth images
+|   |-- cloth-mask/        # Binary masks for clothes
+|   |-- pose/              # Pose keypoints (JSON)
+|   |-- train_pairs.txt    # List of paired (image, cloth) names
+|-- test/
+|   |-- ... (same structure as train)
+|   |-- test_pairs.txt
 ```
 
-## Try-on Module (TOM)
-### Train (quá trình huấn luyện)
-Trước khi thực hiện train Try-on Module, ta sẽ cần sử dụng môđun GMM để tạo ra dữ liệu tạo thư mục `warped-mask` và `warped-cloth` sử dụng lệnh `bash run_gmm_dataset`. Các kết quả `warped-mask` và `warped-cloth` sẽ là đầu vào cho mô hình TOM. Dữ liệu có được sau quá trình thực thi môđun GMM ta kết hợp với bộ dữ liệu ban đầu làm đầu vào cho môđun TOM. Dữ liệu có thể tải về tại [Google Drive](https://drive.google.com/file/d/14vS4Thf7ma3Q4uXdvLnpzhSJ0SLgWLaQ/view?usp=drive_link)<br>
-Ta thực thi file `train_train_tom.sh`
-``` shell
-torchrun \
-  --standalone \
-  --nnodes=1 \
-  --nproc_per_node=1 \
-  --rdzv_id=100 \
-  --rdzv_backend=c10d \
-  --rdzv_endpoint=localhost:29400 \
-  train.py \
-    --dataroot='/kaggle/input/vton-cp-resized/viton_resize' \
-    --name='TOM' --stage='TOM' --workers=1 --checkpoint_dir='/kaggle/working/' \
-    --save_count=10000 --keep_step=50000 --decay_step=50000
+**Note:** For the TOM training stage, you will also need `warped-cloth` and `warped-mask` folders. These are generated by running the trained GMM model on the dataset (see the [Training](#training) section).
+
+## Training
+
+The training process is divided into two stages. You must train GMM first, then use it to prepare data for TOM.
+
+### Stage 1: Geometric Matching Module (GMM)
+Train the spatial transformation network to learn how to warp clothes.
+
+**Command:**
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=1 train.py \
+    --name GMM \
+    --stage GMM \
+    --workers 4 \
+    --batch-size 4 \
+    --dataroot data \
+    --checkpoint_dir checkpoints \
+    --save_count 5000 \
+    --keep_step 100000 \
+    --decay_step 100000
+```
+*   Checkpoints will be saved in `checkpoints/GMM/`.
+
+### Generate Warped Data for TOM
+Before training TOM, use the trained GMM to warp the clothes in your training set.
+*(Note: You can use `test.py` with `datamode='train'` or a custom script to generate these into `data/train/warped-cloth` and `data/train/warped-mask`)*.
+
+### Stage 2: Try-On Module (TOM)
+Train the UNet generator to synthesize the final image.
+
+**Command:**
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=1 train.py \
+    --name TOM \
+    --stage TOM \
+    --workers 4 \
+    --batch-size 4 \
+    --dataroot data \
+    --checkpoint_dir checkpoints \
+    --save_count 5000 \
+    --keep_step 100000 \
+    --decay_step 100000
+```
+*   Checkpoints will be saved in `checkpoints/TOM/`.
+
+## Evaluation
+
+To evaluate the models on the test set:
+
+**Test GMM:**
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=1 test.py \
+    --name GMM \
+    --stage GMM \
+    --dataroot data \
+    --datamode test \
+    --data_list test_pairs.txt \
+    --checkpoint checkpoints/GMM/gmm_final.pth
 ```
 
-### Evaluation (đánh giá)
-Để thực hiện kiểm thử trên tập dữ liệu, ta chạy file `run_test_gmm.sh`
-``` shell
-torchrun \
-  --standalone \
-  --nnodes=1 \
-  --nproc_per_node=1 \
-  --rdzv_id=100 \
-  --rdzv_backend=c10d \
-  --rdzv_endpoint=localhost:29400 \
-  test.py \
-    --dataroot='/kaggle/input/vton-cp-resized/viton_resize' \
-    --name='TOM' --stage='TOM' --workers=1 --checkpoint='/kaggle/input/tom/pytorch/tomfinal100k/1/tom_final.pth' \
-    --data_list='/kaggle/input/vton-cp-resized/viton_resize/test_pairs.txt' --datamode='test'
+**Test TOM:**
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=1 test.py \
+    --name TOM \
+    --stage TOM \
+    --dataroot data \
+    --datamode test \
+    --data_list test_pairs.txt \
+    --checkpoint checkpoints/TOM/tom_final.pth
 ```
-## Test with Pre-trained model
-Dẫn đường dẫn đến thư mục [Release](https://drive.google.com/drive/folders/1UmfTKHUZcw5HXFlES_A0e7WcSkm8oarm?usp=sharing).
+Results will be saved in `data/test/`.
 
-Tại giao diện dòng lệnh, ta thực thi: `python main.py <input_path> <output_path>`
-Tại input folder sẽ bao gồm các thư mục tập tin sau: 
-- pose
-- image-parse
-- image
-- cloth
-- cloth-mask
-- test_pairs.txt
+## Inference
 
-Mô hình được huấn luyện trên bộ dữ liệu `train` với `100.000 epochs`
+To run the full end-to-end inference (GMM + TOM) on a dataset and generate final images:
+
+```bash
+python inference.py \
+    --dataroot data \
+    --datamode test \
+    --tensorboard_dir tensorboard \
+    --result_dir result \
+    --batch-size 1
+```
+
+This script loads both `checkpoints/GMM/gmm_final.pth` and `checkpoints/TOM/tom_final.pth` and saves the final output images to the `result/` directory.
+
+## Pre-trained Models
+You can download pre-trained models from [Google Drive](https://drive.google.com/drive/folders/1UmfTKHUZcw5HXFlES_A0e7WcSkm8oarm?usp=sharing). Place them in the `checkpoints/` directory.
+
 ## References
-Mô hình trên được cài đặt dựa trên bài viết:
 
+1.  **Toward Characteristic-Preserving Image-based Virtual Try-On Network**
+    *   Wang, Bochao and Zheng, Huabin and Liang, Xiaodan and Chen, Yimin and Lin, Liang
+    *   ECCV 2018
+    *   [Paper](https://arxiv.org/abs/1807.08579)
+
+```bibtex
 @inproceedings{wang2018toward,
-	title={Toward Characteristic-Preserving Image-based Virtual Try-On Network},
-	author={Wang, Bochao and Zheng, Huabin and Liang, Xiaodan and Chen, Yimin and Lin, Liang},
-	booktitle={Proceedings of the European Conference on Computer Vision (ECCV)},
-	pages={589--604},
-	year={2018}
+    title={Toward Characteristic-Preserving Image-based Virtual Try-On Network},
+    author={Wang, Bochao and Zheng, Huabin and Liang, Xiaodan and Chen, Yimin and Lin, Liang},
+    booktitle={Proceedings of the European Conference on Computer Vision (ECCV)},
+    pages={589--604},
+    year={2018}
 }
+```
